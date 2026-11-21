@@ -1069,6 +1069,10 @@
       return `${y}-${m}-${d}`;
     }
 
+    function cloneDefaultData() {
+      return JSON.parse(JSON.stringify(DEFAULT_DATA));
+    }
+
     const DEFAULT_DATA = {
       updatedAt: new Date().toISOString(),
       selectedAccountId: "ALL",
@@ -1135,17 +1139,17 @@
     function loadLocalData() {
       try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return structuredClone(DEFAULT_DATA);
+        if (!raw) return cloneDefaultData();
         const parsed = JSON.parse(raw);
-        const merged = { ...structuredClone(DEFAULT_DATA), ...parsed };
+        const merged = { ...cloneDefaultData(), ...parsed };
 
         merged.accounts = Array.isArray(merged.accounts) && merged.accounts.length
           ? merged.accounts
-          : structuredClone(DEFAULT_DATA.accounts);
+          : cloneDefaultData().accounts;
 
         merged.paymentMethods = Array.isArray(merged.paymentMethods) && merged.paymentMethods.length
           ? merged.paymentMethods
-          : structuredClone(DEFAULT_DATA.paymentMethods);
+          : cloneDefaultData().paymentMethods;
         if (!merged.paymentMethods.includes("Prélèvement")) {
           merged.paymentMethods.push("Prélèvement");
         }
@@ -1178,7 +1182,7 @@
 
         return merged;
       } catch {
-        return structuredClone(DEFAULT_DATA);
+        return cloneDefaultData();
       }
     }
 
@@ -1515,6 +1519,72 @@
         name: name.trim(),
         initialBalance
       });
+      saveLocalData();
+    }
+
+    function editAccountPrompt(accId, event) {
+      if (event) event.stopPropagation();
+      const acc = state.accounts.find(a => a.id === accId);
+      if (!acc) return;
+      const name = prompt("Nom du compte :", acc.name);
+      if (!name || !name.trim()) return;
+      const initStr = prompt("Solde initial en euros (avant opérations enregistrées) :", String(acc.initialBalance || 0));
+      const initialBalance = parseFloat((initStr || "0").replace(",", "."));
+      if (isNaN(initialBalance)) return;
+      acc.name = name.trim();
+      acc.initialBalance = initialBalance;
+      saveLocalData();
+    }
+
+    function calibrateAccountPrompt(accId, event) {
+      if (event) event.stopPropagation();
+      const acc = state.accounts.find(a => a.id === accId);
+      if (!acc) return;
+
+      const curBal = computeAccountBalances(accId);
+      const clearedStr = prompt(
+        `Calage de « ${acc.name} » — Solde pointé souhaité (€) :`,
+        String(curBal.cleared.toFixed(2))
+      );
+      if (clearedStr === null) return;
+      const targetCleared = parseFloat(clearedStr.replace(",", "."));
+      if (isNaN(targetCleared)) return;
+
+      const currentStr = prompt(
+        `Calage de « ${acc.name} » — Solde réel actuel souhaité (€) :`,
+        String(curBal.current.toFixed(2))
+      );
+      if (currentStr === null) return;
+      const targetCurrent = parseFloat(currentStr.replace(",", "."));
+      if (isNaN(targetCurrent)) return;
+
+      // 1) Adjust initialBalance so cleared balance equals targetCleared
+      const clearedDiff = targetCleared - curBal.cleared;
+      acc.initialBalance = Number(((acc.initialBalance || 0) + clearedDiff).toFixed(2));
+
+      // 2) After adjusting initialBalance, current balance becomes curBal.current + clearedDiff.
+      // Any remaining difference is represented by an un-cleared adjustment transaction dated today.
+      const projectedCurrent = Number((curBal.current + clearedDiff).toFixed(2));
+      const adjDelta = Number((targetCurrent - projectedCurrent).toFixed(2));
+
+      if (Math.abs(adjDelta) >= 0.005) {
+        const defaultCat = (state.categories[0] && state.categories[0].name) || "Alimentation";
+        state.transactions.unshift({
+          id: "tx-adj-" + Date.now(),
+          date: getTodayLocalISO(),
+          accountId: accId,
+          type: adjDelta >= 0 ? "income" : "expense",
+          amount: Math.abs(adjDelta),
+          paymentMethod: state.paymentMethods[0] || "Carte bancaire",
+          checkNumber: "",
+          category: defaultCat,
+          subcategory: "",
+          payee: "",
+          label: "Ajustement solde réel",
+          cleared: false
+        });
+      }
+
       saveLocalData();
     }
 
@@ -2235,7 +2305,7 @@
             alert("Fichier JSON invalide.");
             return;
           }
-          state = { ...structuredClone(DEFAULT_DATA), ...parsed };
+          state = { ...cloneDefaultData(), ...parsed };
           selectedTxIds.clear();
           saveLocalData();
           alert("Données importées avec succès.");
@@ -2317,7 +2387,7 @@
             const remoteTime = new Date(remoteData.updatedAt || 0).getTime();
             const localTime = new Date(state.updatedAt || 0).getTime();
             if (remoteTime > localTime && Array.isArray(remoteData.transactions)) {
-              state = { ...structuredClone(DEFAULT_DATA), ...remoteData };
+              state = { ...cloneDefaultData(), ...remoteData };
               saveLocalData(false);
               setSyncStatus(`Mis à jour depuis Drive (${new Date().toLocaleTimeString("fr-FR")})`);
               alert("Données récupérées depuis Google Drive (version la plus récente).");
@@ -2443,6 +2513,8 @@
           clearedAll += bal.cleared;
           forecastAll += bal.forecast;
           const selected = state.selectedAccountId === acc.id ? "selected" : "";
+          const calBtn = `<button type="button" class="btn-small btn-secondary" style="color:var(--text);border-color:var(--border);" title="Caler le solde pointé et le solde réel" onclick="calibrateAccountPrompt('${acc.id}', event)">Caler</button>`;
+          const editBtn = `<button type="button" class="btn-edit" title="Modifier le nom ou le solde initial" onclick="editAccountPrompt('${acc.id}', event)">Modifier</button>`;
           const delBtn = canDeleteAcc
             ? `<button type="button" class="btn-danger" title="Supprimer ce compte" onclick="deleteAccount('${acc.id}', event)">Suppr.</button>`
             : "";
@@ -2450,12 +2522,14 @@
             <div class="account-item ${selected}" onclick="selectAccount('${acc.id}')">
               <div>
                 <strong>${acc.name}</strong><br />
-                <span class="muted">Pointé : ${formatEur(bal.cleared)} • Prévision : ${formatEur(bal.forecast)}</span>
+                <span class="muted">Initial : ${formatEur(acc.initialBalance || 0)} • Pointé : ${formatEur(bal.cleared)} • Prévision : ${formatEur(bal.forecast)}</span>
               </div>
               <div class="account-right">
                 <div class="${bal.current >= 0 ? "pos" : "neg"}" style="font-weight:700;">
                   ${formatEur(bal.current)}
                 </div>
+                ${calBtn}
+                ${editBtn}
                 ${delBtn}
               </div>
             </div>
@@ -2509,13 +2583,23 @@
       const selectAllEl = document.getElementById("selectAllTx");
       selectAllEl.checked = filteredTx.length > 0 && filteredTx.every(tx => selectedTxIds.has(tx.id));
 
-      let monthNet = 0;
-      for (const tx of filteredTx) {
-        monthNet += tx.type === "income" ? Number(tx.amount) : -Number(tx.amount);
+      const targetMonth = monthFilter || getTodayLocalISO().slice(0, 7);
+      let monthIncome = 0;
+      let monthExpense = 0;
+      for (const tx of state.transactions) {
+        if (state.selectedAccountId !== "ALL" && tx.accountId !== state.selectedAccountId) continue;
+        if (!tx.date.startsWith(targetMonth)) continue;
+        if (tx.type === "income") monthIncome += Number(tx.amount);
+        else monthExpense += Number(tx.amount);
       }
+      const monthNet = monthIncome - monthExpense;
       const kpiMoisEl = document.getElementById("kpiMois");
       kpiMoisEl.textContent = (monthNet >= 0 ? "+" : "") + formatEur(monthNet);
       kpiMoisEl.className = "kpi-value " + (monthNet >= 0 ? "pos" : "neg");
+      const kpiMoisDetailEl = document.getElementById("kpiMoisDetail");
+      if (kpiMoisDetailEl) {
+        kpiMoisDetailEl.textContent = `${targetMonth} • +${formatEur(monthIncome)} / -${formatEur(monthExpense)}`;
+      }
 
       document.getElementById("txTableBody").innerHTML =
         filteredTx.length === 0
