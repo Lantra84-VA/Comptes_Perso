@@ -2295,7 +2295,7 @@
       try {
         let fileId = localStorage.getItem(DRIVE_FILE_ID_KEY);
         if (!fileId) {
-          const q = encodeURIComponent(`name='${fileName.replace(/'/g, "\'")}' and trashed=false`);
+          const q = encodeURIComponent(`name='${fileName.replace(/'/g, "\\'")}' and trashed=false`);
           const searchRes = await fetch(
             `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)`,
             { headers }
@@ -2419,7 +2419,7 @@
 
       document.getElementById("paymentMethodsTableBody").innerHTML = state.paymentMethods
         .map(m => {
-          const safeM = m.replace(/\/g, "\\").replace(/'/g, "\'");
+          const safeM = m.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
           const delBtn = state.paymentMethods.length > 1
             ? `<button type="button" class="btn-danger" onclick="deletePaymentMethod('${safeM}')">Suppr.</button>`
             : `<span class="muted">Minimum 1 requis</span>`;
@@ -2585,11 +2585,11 @@
 
       document.getElementById("categoriesTableBody").innerHTML = state.categories
         .map(cat => {
-          const safeName = cat.name.replace(/\/g, "\\").replace(/'/g, "\'");
+          const safeName = cat.name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
           const subs = Array.isArray(cat.subcategories) ? cat.subcategories : [];
           const subsHtml = subs.length
             ? subs.map(s => {
-                const safeSub = s.replace(/\/g, "\\").replace(/'/g, "\'");
+                const safeSub = s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
                 return `<span class="badge badge-sub" style="margin:2px 4px 2px 0;">${s} <a href="javascript:void(0)" style="color:inherit;text-decoration:none;margin-left:4px;font-weight:700;" title="Supprimer sous-catégorie" onclick="deleteSubcategory('${safeName}','${safeSub}')">×</a></span>`;
               }).join("")
             : `<span class="muted">Aucune</span>`;
@@ -2610,7 +2610,7 @@
       document.getElementById("payeesTableBody").innerHTML = state.payees.length
         ? state.payees
             .map(p => {
-              const safeP = p.name.replace(/\/g, "\\").replace(/'/g, "\'");
+              const safeP = p.name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
               return `
                 <tr>
                   <td><span class="badge badge-payee">${p.name}</span></td>
