@@ -769,6 +769,10 @@
           </div>
           <div class="form-row">
             <div>
+              <label>Date de début (injection à partir de cette date)</label>
+              <input type="date" id="schStartDate" />
+            </div>
+            <div>
               <label>Date de fin (si non illimité)</label>
               <input type="date" id="schEndDate" disabled />
             </div>
@@ -797,7 +801,7 @@
                 <th>Tiers</th>
                 <th>Libellé</th>
                 <th>Catégorie / Sous-cat.</th>
-                <th>Fin</th>
+                <th>Début / Fin</th>
                 <th>Montant</th>
                 <th>Action</th>
               </tr>
@@ -882,6 +886,10 @@
           </div>
         </div>
         <div class="form-row">
+          <div>
+            <label>Date de début</label>
+            <input type="date" id="editSchStartDate" />
+          </div>
           <div>
             <label>Date de fin (si non illimité)</label>
             <input type="date" id="editSchEndDate" />
@@ -1171,6 +1179,7 @@
         }));
 
         merged.schedules = (merged.schedules || []).map(s => ({
+          startDate: s.startDate || "",
           unlimited: s.unlimited !== undefined ? Boolean(s.unlimited) : !s.endDate,
           endDate: s.endDate || "",
           paymentMethod: s.paymentMethod || "Prélèvement",
@@ -2108,6 +2117,7 @@
 
     function addSchedule(e) {
       e.preventDefault();
+      const startDate = document.getElementById("schStartDate").value || "";
       const unlimited = document.getElementById("schUnlimited").checked;
       const endDate = unlimited ? "" : document.getElementById("schEndDate").value;
 
@@ -2123,6 +2133,7 @@
         subcategory: document.getElementById("schSubcategory").value || "",
         payee: document.getElementById("schPayee").value || "",
         label: document.getElementById("schLabel").value.trim(),
+        startDate,
         unlimited,
         endDate
       });
@@ -2155,6 +2166,7 @@
       populateSubcategorySelect("editSchCategory", "editSchSubcategory", sch.subcategory || "");
       populatePayeeSelect("editSchPayee", sch.payee || "", false);
       document.getElementById("editSchLabel").value = sch.label;
+      document.getElementById("editSchStartDate").value = sch.startDate || "";
       document.getElementById("editSchUnlimited").checked = isUnlimited;
       document.getElementById("editSchEndDate").value = isUnlimited ? "" : (sch.endDate || "");
       toggleScheduleEndInput("editSchUnlimited", "editSchEndDate");
@@ -2172,6 +2184,7 @@
       const idx = state.schedules.findIndex(s => s.id === schId);
       if (idx === -1) return;
 
+      const startDate = document.getElementById("editSchStartDate").value || "";
       const unlimited = document.getElementById("editSchUnlimited").checked;
       const endDate = unlimited ? "" : document.getElementById("editSchEndDate").value;
 
@@ -2185,6 +2198,7 @@
         subcategory: document.getElementById("editSchSubcategory").value || "",
         payee: document.getElementById("editSchPayee").value || "",
         label: document.getElementById("editSchLabel").value.trim(),
+        startDate,
         unlimited,
         endDate
       };
@@ -2199,6 +2213,7 @@
     }
 
     function isScheduleActiveForDate(sch, dateStr) {
+      if (sch.startDate && dateStr < sch.startDate) return false;
       const unlimited = sch.unlimited !== undefined ? Boolean(sch.unlimited) : !sch.endDate;
       if (unlimited || !sch.endDate) return true;
       return dateStr <= sch.endDate;
@@ -2716,9 +2731,9 @@
               .map(sch => {
                 const accName = (state.accounts.find(a => a.id === sch.accountId) || {}).name || "Compte";
                 const isUnlimited = sch.unlimited !== undefined ? Boolean(sch.unlimited) : !sch.endDate;
-                const endLabel = isUnlimited
-                  ? "<span class='badge badge-ok'>Illimité</span>"
-                  : `<span class='badge badge-wait'>Jusqu'au ${sch.endDate}</span>`;
+                const startText = sch.startDate ? `Dès le ${sch.startDate}` : "Dès le début";
+                const endText = isUnlimited ? "Illimité" : `Jusqu'au ${sch.endDate}`;
+                const endLabel = `<span class='badge ${isUnlimited ? "badge-ok" : "badge-wait"}'>${startText} • ${endText}</span>`;
                 const subBadge = sch.subcategory
                   ? ` <span class="badge badge-sub">${sch.subcategory}</span>`
                   : "";
