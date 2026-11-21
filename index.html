@@ -1770,8 +1770,7 @@
       const items = [];
       const records = content.split(/\^/);
       for (const rec of records) {
-        const lines = rec.split(/?
-/).map(l => l.trim()).filter(Boolean);
+        const lines = rec.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
         if (!lines.length) continue;
         let date = "";
         let amount = NaN;
@@ -1823,8 +1822,7 @@
     }
 
     function parseCSV(content) {
-      const lines = content.split(/?
-/).map(l => l.trim()).filter(Boolean);
+      const lines = content.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
       if (!lines.length) return [];
       const firstLine = lines[0];
       const sep = (firstLine.split(";").length >= firstLine.split(",").length) ? ";" : ",";
