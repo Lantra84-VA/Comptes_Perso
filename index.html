@@ -433,7 +433,7 @@
     <section id="tab-ops">
       <div class="grid-3">
         <div class="card">
-          <div class="kpi-label">Solde total actuel (tous comptes)</div>
+          <div class="kpi-label">Solde total actuel (échu à ce jour)</div>
           <div class="kpi-value" id="kpiTotal">0,00 €</div>
           <div class="muted" id="kpiCompteActif">Filtre : Tous les comptes</div>
         </div>
@@ -1061,6 +1061,14 @@
     const STORAGE_KEY = "mes_comptes_perso_v1";
     const DRIVE_FILE_ID_KEY = "mes_comptes_drive_file_id_v1";
 
+    function getTodayLocalISO() {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, "0");
+      const d = String(now.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    }
+
     const DEFAULT_DATA = {
       updatedAt: new Date().toISOString(),
       selectedAccountId: "ALL",
@@ -1088,7 +1096,7 @@
       transactions: [
         {
           id: "tx-1",
-          date: new Date().toISOString().slice(0, 10),
+          date: getTodayLocalISO(),
           accountId: "acc-courant",
           type: "expense",
           amount: 68.4,
@@ -1267,17 +1275,22 @@
 
     function computeAccountBalances(accountId) {
       const acc = state.accounts.find(a => a.id === accountId);
-      if (!acc) return { current: 0, cleared: 0 };
+      if (!acc) return { current: 0, cleared: 0, forecast: 0 };
+      const todayStr = getTodayLocalISO();
       let current = Number(acc.initialBalance || 0);
       let cleared = Number(acc.initialBalance || 0);
+      let forecast = Number(acc.initialBalance || 0);
 
       for (const tx of state.transactions) {
         if (tx.accountId !== accountId) continue;
         const delta = tx.type === "income" ? Number(tx.amount) : -Number(tx.amount);
-        current += delta;
+        forecast += delta;
+        if (tx.date <= todayStr) {
+          current += delta;
+        }
         if (tx.cleared) cleared += delta;
       }
-      return { current, cleared };
+      return { current, cleared, forecast };
     }
 
     function deleteAccount(accId, event) {
@@ -1703,7 +1716,7 @@
     }
 
     function normalizeDateStr(raw) {
-      if (!raw) return new Date().toISOString().slice(0, 10);
+      if (!raw) return getTodayLocalISO();
       const s = String(raw).trim().replace(/['"]/g, "");
       const ymd = s.match(/^(\d{4})(\d{2})(\d{2})/);
       if (ymd) return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
@@ -1715,7 +1728,7 @@
         if (yr.length === 2) yr = (Number(yr) > 70 ? "19" : "20") + yr;
         return `${yr}-${fr[2].padStart(2, "0")}-${fr[1].padStart(2, "0")}`;
       }
-      return new Date().toISOString().slice(0, 10);
+      return getTodayLocalISO();
     }
 
     function parseAmountNum(raw) {
@@ -1736,7 +1749,7 @@
         const endIdx = blk.search(/<\/STMTTRN>/i);
         const chunk = endIdx >= 0 ? blk.slice(0, endIdx) : blk;
         const getTag = tag => {
-          const m = chunk.match(new RegExp(`<${tag}>([^<\\r\\n]+)`, "i"));
+          const m = chunk.match(new RegExp(`<${tag}>([^<\r\n]+)`, "i"));
           return m ? m[1].trim() : "";
         };
         const dt = normalizeDateStr(getTag("DTPOSTED"));
@@ -1757,7 +1770,8 @@
       const items = [];
       const records = content.split(/\^/);
       for (const rec of records) {
-        const lines = rec.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        const lines = rec.split(/?
+/).map(l => l.trim()).filter(Boolean);
         if (!lines.length) continue;
         let date = "";
         let amount = NaN;
@@ -1774,7 +1788,7 @@
         const finalLabel = label || memo || "Opération QIF";
         if (!isNaN(amount) && amount !== 0) {
           items.push({
-            date: date || new Date().toISOString().slice(0, 10),
+            date: date || getTodayLocalISO(),
             type: amount >= 0 ? "income" : "expense",
             amount: Math.abs(amount),
             label: finalLabel
@@ -1809,7 +1823,8 @@
     }
 
     function parseCSV(content) {
-      const lines = content.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const lines = content.split(/?
+/).map(l => l.trim()).filter(Boolean);
       if (!lines.length) return [];
       const firstLine = lines[0];
       const sep = (firstLine.split(";").length >= firstLine.split(",").length) ? ";" : ",";
@@ -2049,7 +2064,7 @@
       document.getElementById("schUnlimited").checked = true;
       toggleScheduleEndInput("schUnlimited", "schEndDate");
 
-      injectSchedulesForMonth(new Date().toISOString().slice(0, 7));
+      injectSchedulesForMonth(getTodayLocalISO().slice(0, 7));
       saveLocalData();
     }
 
@@ -2157,7 +2172,7 @@
     }
 
     function autoInjectCurrentMonthOnLoad() {
-      const currentMonth = new Date().toISOString().slice(0, 7);
+      const currentMonth = getTodayLocalISO().slice(0, 7);
       const added = injectSchedulesForMonth(currentMonth);
       if (added > 0) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -2165,7 +2180,7 @@
     }
 
     function applySchedulesForCurrentMonth() {
-      const monthVal = document.getElementById("filterMonth").value || new Date().toISOString().slice(0, 7);
+      const monthVal = document.getElementById("filterMonth").value || getTodayLocalISO().slice(0, 7);
       const added = injectSchedulesForMonth(monthVal);
       saveLocalData();
       alert(`${added} opération(s) injectée(s) pour ${monthVal}.`);
@@ -2282,7 +2297,7 @@
       try {
         let fileId = localStorage.getItem(DRIVE_FILE_ID_KEY);
         if (!fileId) {
-          const q = encodeURIComponent(`name='${fileName.replace(/'/g, "\\'")}' and trashed=false`);
+          const q = encodeURIComponent(`name='${fileName.replace(/'/g, "\'")}' and trashed=false`);
           const searchRes = await fetch(
             `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)`,
             { headers }
@@ -2406,7 +2421,7 @@
 
       document.getElementById("paymentMethodsTableBody").innerHTML = state.paymentMethods
         .map(m => {
-          const safeM = m.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+          const safeM = m.replace(/\/g, "\\").replace(/'/g, "\'");
           const delBtn = state.paymentMethods.length > 1
             ? `<button type="button" class="btn-danger" onclick="deletePaymentMethod('${safeM}')">Suppr.</button>`
             : `<span class="muted">Minimum 1 requis</span>`;
@@ -2421,12 +2436,14 @@
 
       let totalAll = 0;
       let clearedAll = 0;
+      let forecastAll = 0;
       const canDeleteAcc = state.accounts.length > 1;
       const accountsHtml = state.accounts
         .map(acc => {
           const bal = computeAccountBalances(acc.id);
           totalAll += bal.current;
           clearedAll += bal.cleared;
+          forecastAll += bal.forecast;
           const selected = state.selectedAccountId === acc.id ? "selected" : "";
           const delBtn = canDeleteAcc
             ? `<button type="button" class="btn-danger" title="Supprimer ce compte" onclick="deleteAccount('${acc.id}', event)">Suppr.</button>`
@@ -2435,7 +2452,7 @@
             <div class="account-item ${selected}" onclick="selectAccount('${acc.id}')">
               <div>
                 <strong>${acc.name}</strong><br />
-                <span class="muted">Pointé : ${formatEur(bal.cleared)}</span>
+                <span class="muted">Pointé : ${formatEur(bal.cleared)} • Prévision : ${formatEur(bal.forecast)}</span>
               </div>
               <div class="account-right">
                 <div class="${bal.current >= 0 ? "pos" : "neg"}" style="font-weight:700;">
@@ -2451,16 +2468,29 @@
       const allSelected = state.selectedAccountId === "ALL" ? "selected" : "";
       document.getElementById("accountsList").innerHTML =
         `<div class="account-item ${allSelected}" onclick="selectAccount('ALL')">
-          <strong>Tous les comptes</strong>
-          <strong>${formatEur(totalAll)}</strong>
+          <div>
+            <strong>Tous les comptes</strong><br />
+            <span class="muted">Prévision totale : ${formatEur(forecastAll)}</span>
+          </div>
+          <strong class="${totalAll >= 0 ? "pos" : "neg"}">${formatEur(totalAll)}</strong>
         </div>` + accountsHtml;
 
-      document.getElementById("kpiTotal").textContent = formatEur(totalAll);
-      document.getElementById("kpiPointe").textContent = formatEur(clearedAll);
-
       const selectedAccObj = state.accounts.find(a => a.id === state.selectedAccountId);
+      const displayedBal = selectedAccObj
+        ? computeAccountBalances(selectedAccObj.id)
+        : { current: totalAll, cleared: clearedAll, forecast: forecastAll };
+
+      const kpiTotalEl = document.getElementById("kpiTotal");
+      kpiTotalEl.textContent = formatEur(displayedBal.current);
+      kpiTotalEl.className = "kpi-value " + (displayedBal.current >= 0 ? "pos" : "neg");
+
+      const kpiPointeEl = document.getElementById("kpiPointe");
+      kpiPointeEl.textContent = formatEur(displayedBal.cleared);
+      kpiPointeEl.className = "kpi-value " + (displayedBal.cleared >= 0 ? "pos" : "neg");
+
       document.getElementById("kpiCompteActif").textContent =
-        selectedAccObj ? `Filtre : ${selectedAccObj.name}` : "Filtre : Tous les comptes";
+        (selectedAccObj ? `Filtre : ${selectedAccObj.name}` : "Filtre : Tous les comptes") +
+        ` • Prévision : ${formatEur(displayedBal.forecast)}`;
 
       const monthFilter = document.getElementById("filterMonth").value;
       renderBalanceChart(monthFilter);
@@ -2531,7 +2561,7 @@
               })
               .join("");
 
-      const activeMonth = monthFilter || new Date().toISOString().slice(0, 7);
+      const activeMonth = monthFilter || getTodayLocalISO().slice(0, 7);
       const budgetsHtml = state.categories
         .filter(c => Number(c.budget) > 0)
         .map(cat => {
@@ -2557,11 +2587,11 @@
 
       document.getElementById("categoriesTableBody").innerHTML = state.categories
         .map(cat => {
-          const safeName = cat.name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+          const safeName = cat.name.replace(/\/g, "\\").replace(/'/g, "\'");
           const subs = Array.isArray(cat.subcategories) ? cat.subcategories : [];
           const subsHtml = subs.length
             ? subs.map(s => {
-                const safeSub = s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+                const safeSub = s.replace(/\/g, "\\").replace(/'/g, "\'");
                 return `<span class="badge badge-sub" style="margin:2px 4px 2px 0;">${s} <a href="javascript:void(0)" style="color:inherit;text-decoration:none;margin-left:4px;font-weight:700;" title="Supprimer sous-catégorie" onclick="deleteSubcategory('${safeName}','${safeSub}')">×</a></span>`;
               }).join("")
             : `<span class="muted">Aucune</span>`;
@@ -2582,7 +2612,7 @@
       document.getElementById("payeesTableBody").innerHTML = state.payees.length
         ? state.payees
             .map(p => {
-              const safeP = p.name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+              const safeP = p.name.replace(/\/g, "\\").replace(/'/g, "\'");
               return `
                 <tr>
                   <td><span class="badge badge-payee">${p.name}</span></td>
@@ -2639,7 +2669,7 @@
       saveLocalData(false);
     }
 
-    document.getElementById("txDate").value = new Date().toISOString().slice(0, 10);
+    document.getElementById("txDate").value = getTodayLocalISO();
     autoInjectCurrentMonthOnLoad();
     renderAll();
   </script>
