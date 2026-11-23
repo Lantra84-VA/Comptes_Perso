@@ -411,7 +411,8 @@
         </div>
       </div>
       <div class="actions">
-        <button class="btn-sync" onclick="syncWithGoogleDrive()">↻ Synchroniser Drive</button>
+        <button class="btn-sync" onclick="uploadToDrive()">↑ Envoyer vers Drive</button>
+        <button class="btn-secondary" onclick="downloadFromDrive()">↓ Télécharger Drive</button>
         <button class="btn-primary" onclick="openStatementImportModal()">Importer CSV / OFX / QIF</button>
         <button class="btn-secondary" onclick="exportJSON()">Exporter JSON</button>
         <button class="btn-secondary" onclick="document.getElementById('importFile').click()">Importer JSON</button>
@@ -2342,7 +2343,7 @@
       document.getElementById("syncStatus").textContent = msg;
     }
 
-    async function syncWithGoogleDrive() {
+    function requestGoogleDriveAuth(onAuthorized) {
       const clientId = state.driveConfig.clientId || document.getElementById("googleClientId").value.trim();
       if (!clientId) {
         alert("Veuillez d'abord renseigner votre Google OAuth Client ID dans l'onglet 'Paramètres & Google Drive'.");
@@ -2366,31 +2367,101 @@
             return;
           }
           googleAccessToken = tokenResponse.access_token;
-          await performDriveSync();
+          await onAuthorized();
         }
       });
 
       tokenClient.requestAccessToken({ prompt: googleAccessToken ? "" : "consent" });
     }
 
-    async function performDriveSync() {
+    async function findDriveFileId(headers, fileName) {
+      let fileId = localStorage.getItem(DRIVE_FILE_ID_KEY);
+      if (!fileId) {
+        const q = encodeURIComponent(`name='${fileName.replace(/'/g, "\\'")}' and trashed=false`);
+        const searchRes = await fetch(
+          `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)`,
+          { headers }
+        );
+        const searchJson = await searchRes.json();
+        if (searchJson.files && searchJson.files.length > 0) {
+          fileId = searchJson.files[0].id;
+          localStorage.setItem(DRIVE_FILE_ID_KEY, fileId);
+        }
+      }
+      return fileId;
+    }
+
+    async function downloadFromDrive() {
+      requestGoogleDriveAuth(async () => {
+        const fileName = state.driveConfig.fileName || "comptes_perso.json";
+        const headers = { Authorization: `Bearer ${googleAccessToken}` };
+
+        try {
+          const fileId = await findDriveFileId(headers, fileName);
+          if (!fileId) {
+            alert(`Aucun fichier « ${fileName} » trouvé sur Google Drive.`);
+            setSyncStatus("Fichier Drive introuvable");
+            return;
+          }
+
+          const getRes = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+            { headers }
+          );
+          if (!getRes.ok) {
+            throw new Error("Lecture Drive impossible");
+          }
+
+          const remoteData = await getRes.json();
+          if (!Array.isArray(remoteData.transactions) || !Array.isArray(remoteData.accounts)) {
+            alert("Le fichier sur Google Drive ne contient pas de données valides.");
+            return;
+          }
+
+          const remoteDateStr = remoteData.updatedAt
+            ? new Date(remoteData.updatedAt).toLocaleString("fr-FR")
+            : "date inconnue";
+          const ok = confirm(
+            `Télécharger depuis Drive (« ${fileName} ») ?\n` +
+            `• Version Drive : ${remoteDateStr} (${remoteData.transactions.length} opération(s))\n` +
+            `• Version locale actuelle : ${state.transactions.length} opération(s)\n\n` +
+            `Les données locales de ce navigateur seront remplacées (le fichier sur Drive ne sera pas modifié).`
+          );
+          if (!ok) {
+            setSyncStatus("Téléchargement Drive annulé");
+            return;
+          }
+
+          state = { ...cloneDefaultData(), ...remoteData };
+          selectedTxIds.clear();
+          saveLocalData(false);
+          setSyncStatus(`Téléchargé depuis Drive (${new Date().toLocaleTimeString("fr-FR")})`);
+          alert("Données téléchargées depuis Google Drive avec succès.");
+        } catch (err) {
+          console.error(err);
+          setSyncStatus("Erreur de téléchargement Drive");
+          alert("Impossible de télécharger depuis Google Drive.");
+        }
+      });
+    }
+
+    async function uploadToDrive() {
+      requestGoogleDriveAuth(async () => {
+        await performDriveUpload();
+      });
+    }
+
+    async function syncWithGoogleDrive() {
+      await uploadToDrive();
+    }
+
+    async function performDriveUpload() {
       const fileName = state.driveConfig.fileName || "comptes_perso.json";
       const headers = { Authorization: `Bearer ${googleAccessToken}` };
 
       try {
-        let fileId = localStorage.getItem(DRIVE_FILE_ID_KEY);
-        if (!fileId) {
-          const q = encodeURIComponent(`name='${fileName.replace(/'/g, "\\'")}' and trashed=false`);
-          const searchRes = await fetch(
-            `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)`,
-            { headers }
-          );
-          const searchJson = await searchRes.json();
-          if (searchJson.files && searchJson.files.length > 0) {
-            fileId = searchJson.files[0].id;
-            localStorage.setItem(DRIVE_FILE_ID_KEY, fileId);
-          }
-        }
+        let fileId = await findDriveFileId(headers, fileName);
+        let remoteData = null;
 
         if (fileId) {
           const getRes = await fetch(
@@ -2398,16 +2469,27 @@
             { headers }
           );
           if (getRes.ok) {
-            const remoteData = await getRes.json();
-            const remoteTime = new Date(remoteData.updatedAt || 0).getTime();
-            const localTime = new Date(state.updatedAt || 0).getTime();
-            if (remoteTime > localTime && Array.isArray(remoteData.transactions)) {
-              state = { ...cloneDefaultData(), ...remoteData };
-              saveLocalData(false);
-              setSyncStatus(`Mis à jour depuis Drive (${new Date().toLocaleTimeString("fr-FR")})`);
-              alert("Données récupérées depuis Google Drive (version la plus récente).");
-              return;
-            }
+            remoteData = await getRes.json();
+          }
+        }
+
+        if (fileId && remoteData && Array.isArray(remoteData.transactions)) {
+          const remoteTime = new Date(remoteData.updatedAt || 0).getTime();
+          const localTime = new Date(state.updatedAt || 0).getTime();
+          const remoteDateStr = remoteData.updatedAt
+            ? new Date(remoteData.updatedAt).toLocaleString("fr-FR")
+            : "date inconnue";
+          const warning = remoteTime > localTime
+            ? `ATTENTION : la version sur Drive semble PLUS RÉCENTE que vos données locales !\n\n`
+            : "";
+          const ok = confirm(
+            `${warning}Envoyer les données de cet appareil vers Drive et remplacer « ${fileName} » ?\n` +
+            `• Version actuelle sur Drive : ${remoteDateStr} (${remoteData.transactions.length} opération(s))\n` +
+            `• Version locale à envoyer : ${state.transactions.length} opération(s)`
+          );
+          if (!ok) {
+            setSyncStatus("Envoi annulé (Drive non modifié)");
+            return;
           }
         }
 
@@ -2441,8 +2523,8 @@
         }
 
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-        setSyncStatus(`Synchronisé sur Drive (${new Date().toLocaleTimeString("fr-FR")})`);
-        alert("Synchronisation Google Drive réussie.");
+        setSyncStatus(`Envoyé sur Drive (${new Date().toLocaleTimeString("fr-FR")})`);
+        alert("Envoi vers Google Drive réussi.");
       } catch (err) {
         console.error(err);
         setSyncStatus("Erreur de synchronisation Drive");
